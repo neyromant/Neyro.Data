@@ -34,6 +34,15 @@ namespace Neyro.Data
             return this;
         }
 
+        public DataManager Sql(string cmdText)
+        {
+            this.command = this.connection.CreateCommand();
+            this.command.CommandText = cmdText;
+            this.command.CommandType = CommandType.Text;
+            this.cmdHashCode = cmdText.GetHashCode();
+            return this;
+        }
+
         public DataManager AddParams(object @params)
         {
             var type = @params.GetType();
