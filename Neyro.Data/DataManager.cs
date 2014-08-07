@@ -9,12 +9,13 @@ namespace Neyro.Data
 {
     public class DataManager : IDisposable
     {
-        internal delegate T DmDelegate<T>(IDataRecord dr) where T : new();
+        private delegate T DmDelegate<T>(IDataRecord dr);
 
         private static readonly Dictionary<Type, Dictionary<int, Delegate>> invokes = new Dictionary<Type, Dictionary<int, Delegate>>();
         private static readonly object invokeLock = new object();
-        private static readonly MethodInfo getValueMethod = typeof(IDataRecord).GetMethod("get_Item", new[] { typeof(int) });
-        private static readonly MethodInfo isDBNullMethod = typeof(IDataRecord).GetMethod("IsDBNull", new[] { typeof(int) });
+        private static readonly MethodInfo getValueMethod = typeof(IDataRecord).GetMethod("get_Item", new Type[] { typeof(int) });
+        private static readonly MethodInfo isDBNullMethod = typeof(IDataRecord).GetMethod("IsDBNull", new Type[] { typeof(int) });
+
         private IDbConnection connection;
         private IDbCommand command;
         private int cmdHashCode;
@@ -64,31 +65,28 @@ namespace Neyro.Data
             var ttype = typeof(T);
             var props = ttype.GetProperties();
 
-            using (var table = new DataTable())
+            var table = new DataTable();
+
+            table.Columns.AddRange(props.Select(p =>
+                p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == typeof(Nullable<>)
+                ? new DataColumn(p.Name, p.PropertyType.GetGenericArguments()[0]) { AllowDBNull = true }
+                : new DataColumn(p.Name, p.PropertyType)
+            ).ToArray());
+
+            foreach (var d in paramValue)
             {
-
-                table.Columns.AddRange(props.Select(p =>
-                    p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == typeof(Nullable<>)
-                        ? new DataColumn(p.Name, p.PropertyType.GetGenericArguments()[0]) { AllowDBNull = true }
-                        : new DataColumn(p.Name, p.PropertyType)
-                    ).ToArray());
-
-                foreach (var d in paramValue)
+                var row = table.NewRow();
+                foreach (var p in props)
                 {
-                    var row = table.NewRow();
-                    foreach (var p in props)
-                    {
-                        var v = p.GetValue(d, null);
-                        if (v == null)
-                            row[p.Name] = DBNull.Value;
-                        else
-                            row[p.Name] = v;
-
-                    }
-                    table.Rows.Add(row);
+                    var v = p.GetValue(d, null);
+                    if (v == null)
+                        row[p.Name] = DBNull.Value;
+                    else
+                        row[p.Name] = v;
                 }
-                this.command.Parameters.Add(new System.Data.SqlClient.SqlParameter(string.Concat("@", paramName), table));
+                table.Rows.Add(row);
             }
+            this.command.Parameters.Add(new System.Data.SqlClient.SqlParameter(string.Format("@{0}", paramName), table));
             return this;
         }
 
@@ -101,18 +99,19 @@ namespace Neyro.Data
             return result;
         }
 
-        public void Execute()
+        public int Execute()
         {
             this.OpenConnection();
-            this.command.ExecuteNonQuery();
+            return this.command.ExecuteNonQuery();
         }
 
-        public T Get<T>(params Action<IDataRecord, T>[] detailCreators) where T : new()
+        #region Get
+        public T Get<T>(params Action<IDataRecord, T>[] detailCreators) 
         {
             this.OpenConnection();
             using (var dr = this.command.ExecuteReader())
             {
-                var res = dr.Read() ? this.Create<T>(dr) : default(T);
+                T res = dr.Read() ? this.Create<T>(dr) : default(T);
                 if (detailCreators != null && detailCreators.Length > 0)
                     foreach (var detailCreator in detailCreators)
                         if (dr.NextResult())
@@ -122,6 +121,7 @@ namespace Neyro.Data
             }
         }
 
+        
         public T Get<T, TA>(Func<T, List<TA>> subList)
             where T : new()
             where TA : new()
@@ -241,8 +241,10 @@ namespace Neyro.Data
                 return res;
             }
         }
+        #endregion
 
-        public List<T> GetList<T>(params Action<IDataRecord, List<T>>[] detailCreators) where T : new()
+        #region GetList
+        public List<T> GetList<T>(params Action<IDataRecord, List<T>>[] detailCreators)
         {
             this.OpenConnection();
             var res = new List<T>();
@@ -417,6 +419,9 @@ namespace Neyro.Data
             }
             return res;
         }
+        #endregion
+
+
 
         public void Raw(Action<IDataReader> action)
         {
@@ -427,12 +432,12 @@ namespace Neyro.Data
             }
         }
 
-        public T Create<T>(IDataRecord dr) where T : new()
+        public T Create<T>(IDataRecord dr)
         {
             return this.GetCreator<T>(dr)(dr);
         }
 
-        private DmDelegate<T> GetCreator<T>(IDataRecord dr) where T : new()
+        private DmDelegate<T> GetCreator<T>(IDataRecord dr) 
         {
             var ct = typeof(T);
             if (!invokes.ContainsKey(ct) || !invokes[ct].ContainsKey(cmdHashCode))
@@ -442,55 +447,64 @@ namespace Neyro.Data
                     if (!invokes.ContainsKey(ct) || !invokes[ct].ContainsKey(cmdHashCode))
                     {
                         Type[] methodArgs2 = { typeof(IDataRecord) };
-                        var method = new DynamicMethod(
+                        DynamicMethod method = new DynamicMethod(
                             "ct",
                             ct,
                             methodArgs2, typeof(DataManager));
 
-                        var generator = method.GetILGenerator();
-                        var localV = generator.DeclareLocal(ct);
+                        ILGenerator generator = method.GetILGenerator();
+                        LocalBuilder localV = generator.DeclareLocal(ct);
 
-                        generator.Emit(OpCodes.Newobj, con: ct.GetConstructor(Type.EmptyTypes));
-                        generator.Emit(OpCodes.Stloc, localV);
-                        for (int i = 0; i < dr.FieldCount; i++)
+                        if (CheckIsPrimitiveType(ct))
                         {
-                            var propertyInfo = ct.GetProperty(dr.GetName(i));
-
-                            if (propertyInfo != null)
+                            generator.Emit(OpCodes.Ldarg_0);
+                            generator.Emit(OpCodes.Ldc_I4, 0);
+                            generator.Emit(OpCodes.Call, getValueMethod);
+                            generator.Emit(OpCodes.Unbox_Any, dr.GetFieldType(0));
+                            generator.Emit(OpCodes.Stloc, localV);
+                        }
+                        else
+                        {
+                            generator.Emit(OpCodes.Newobj, ct.GetConstructor(Type.EmptyTypes));
+                            generator.Emit(OpCodes.Stloc, localV);
+                            for (int i = 0; i < dr.FieldCount; i++)
                             {
-                                var setMethod = propertyInfo.GetSetMethod();
-                                if (setMethod != null)
+                                var propertyInfo = ct.GetProperty(dr.GetName(i));
+
+                                if (propertyInfo != null)
                                 {
-                                    var endIfLabel = generator.DefineLabel();
-
-                                    generator.Emit(OpCodes.Ldarg_0);
-                                    generator.Emit(OpCodes.Ldc_I4, i);
-                                    generator.Emit(OpCodes.Callvirt, isDBNullMethod);
-                                    generator.Emit(OpCodes.Brtrue, endIfLabel);
-
-                                    generator.Emit(OpCodes.Ldloc, localV);
-                                    generator.Emit(OpCodes.Ldarg_0);
-                                    generator.Emit(OpCodes.Ldc_I4, i);
-                                    generator.Emit(OpCodes.Call, getValueMethod);
-
-
-                                    generator.Emit(OpCodes.Unbox_Any, dr.GetFieldType(i));
-                                    if (propertyInfo.PropertyType.IsGenericType && propertyInfo.PropertyType.GetGenericTypeDefinition() == typeof(Nullable<>))
+                                    var setMethod = propertyInfo.GetSetMethod();
+                                    if (setMethod != null)
                                     {
-                                        generator.Emit(OpCodes.Newobj, con: propertyInfo.PropertyType.GetConstructor(propertyInfo.PropertyType.GetGenericArguments()));
-                                    }
-                                    generator.Emit(OpCodes.Call, setMethod);
+                                        var endIfLabel = generator.DefineLabel();
 
-                                    generator.MarkLabel(endIfLabel);
+                                        generator.Emit(OpCodes.Ldarg_0);
+                                        generator.Emit(OpCodes.Ldc_I4, i);
+                                        generator.Emit(OpCodes.Callvirt, isDBNullMethod);
+                                        generator.Emit(OpCodes.Brtrue, endIfLabel);
+
+                                        generator.Emit(OpCodes.Ldloc, localV);
+                                        generator.Emit(OpCodes.Ldarg_0);
+                                        generator.Emit(OpCodes.Ldc_I4, i);
+                                        generator.Emit(OpCodes.Call, getValueMethod);
+
+                                        generator.Emit(OpCodes.Unbox_Any, dr.GetFieldType(i));
+                                        if (propertyInfo.PropertyType.IsGenericType && propertyInfo.PropertyType.GetGenericTypeDefinition() == typeof(Nullable<>))
+                                        {
+                                            generator.Emit(OpCodes.Newobj, propertyInfo.PropertyType.GetConstructor(propertyInfo.PropertyType.GetGenericArguments()));
+                                        }
+                                        generator.Emit(OpCodes.Call, setMethod);
+
+                                        generator.MarkLabel(endIfLabel);
+                                    }
+                                }
+                                else
+                                {
+                                    var name = dr.GetName(i);
+                                    this.WorkWithSubClass(generator, localV, ct, name, dr, i);
                                 }
                             }
-                            else
-                            {
-                                var name = dr.GetName(i);
-                                this.WorkWithSubClass(generator, localV, ct, name, dr, i);
-                            }
                         }
-
                         generator.Emit(OpCodes.Ldloc, localV);
                         generator.Emit(OpCodes.Ret);
                         if (!invokes.ContainsKey(ct)) invokes.Add(ct, new Dictionary<int, Delegate>());
@@ -504,7 +518,7 @@ namespace Neyro.Data
 
         private bool WorkWithSubClass(ILGenerator generator, LocalBuilder localV, Type type, string name, IDataRecord dr, int i)
         {
-            var props = type.GetProperties().Where(p => p.Name.IndexOf(name, StringComparison.Ordinal) == 0);
+            var props = type.GetProperties().Where(p => name.IndexOf(p.Name) == 0);
             foreach (var p in props)
             {
                 var fname = name.Remove(0, p.Name.Length);
@@ -541,7 +555,7 @@ namespace Neyro.Data
                             generator.Emit(OpCodes.Unbox_Any, dr.GetFieldType(i));
                             if (subPropertyInfo.PropertyType.IsGenericType && subPropertyInfo.PropertyType.GetGenericTypeDefinition() == typeof(Nullable<>))
                             {
-                                generator.Emit(OpCodes.Newobj, con: subPropertyInfo.PropertyType.GetConstructor(subPropertyInfo.PropertyType.GetGenericArguments()));
+                                generator.Emit(OpCodes.Newobj, subPropertyInfo.PropertyType.GetConstructor(subPropertyInfo.PropertyType.GetGenericArguments()));
                             }
                             generator.Emit(OpCodes.Call, setMethod);
 
@@ -563,7 +577,12 @@ namespace Neyro.Data
             return false;
         }
 
-        internal void OpenConnection()
+        private static bool CheckIsPrimitiveType(Type type)
+        {
+            return (type == typeof(object) || Type.GetTypeCode(type) != TypeCode.Object);
+        }
+
+        private void OpenConnection()
         {
             switch (this.connection.State)
             {
@@ -613,5 +632,6 @@ namespace Neyro.Data
                 this.connection = null;
             }
         }
+
     }
 }
