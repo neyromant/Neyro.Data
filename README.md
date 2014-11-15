@@ -1,6 +1,7 @@
 Neyro.Data
 ==========
-Small and fast micro ORM
+Small and fast micro ORM.
+
 Full description you can see in http://habrahabr.ru/post/218225/
 
 
