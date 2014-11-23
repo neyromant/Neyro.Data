@@ -70,7 +70,7 @@ namespace Neyro.Data
         {
             var newPar = this.command.CreateParameter();
             newPar.ParameterName = string.Format("@{0}", name);
-            newPar.Value = value;
+            newPar.Value = value ?? DBNull.Value;
             this.command.Parameters.Add(newPar);
             return this;
         }
