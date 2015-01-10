@@ -158,6 +158,19 @@ namespace Neyro.Data
         /// Выполнение запроса и получение объекта - результата выборки одиночной строки с возможностью получения любого количества подчиненных записей
         /// </summary>
         /// <typeparam name="T">Тип получаемого объекта</typeparam>
+        /// <returns>Результат выборки</returns>
+        public T Get<T>()
+        {
+            this.OpenConnection();
+            using (var dr = this.command.ExecuteReader())
+            {
+                return dr.Read() ? this.Create<T>(dr) : default(T);
+            }
+        }
+        /// <summary>
+        /// Выполнение запроса и получение объекта - результата выборки одиночной строки с возможностью получения любого количества подчиненных записей
+        /// </summary>
+        /// <typeparam name="T">Тип получаемого объекта</typeparam>
         /// <param name="detailCreators">Делегаты для обработки дочерних строк выборки</param>
         /// <returns>Результат выборки</returns>
         public T Get<T>(params Action<IDataRecord, T>[] detailCreators) 
@@ -165,7 +178,7 @@ namespace Neyro.Data
             this.OpenConnection();
             using (var dr = this.command.ExecuteReader())
             {
-                T res = dr.Read() ? this.Create<T>(dr) : default(T);
+                var res = dr.Read() ? this.Create<T>(dr) : default(T);
                 if (detailCreators != null && detailCreators.Length > 0)
                     foreach (var detailCreator in detailCreators)
                         if (dr.NextResult())
@@ -335,6 +348,22 @@ namespace Neyro.Data
         #endregion
 
         #region GetList
+        /// <summary>
+        /// Выполнение запроса и получение списка объектов - результата выборки множества строк и неограниченного кол-ва подчиненных выборок
+        /// </summary>
+        /// <typeparam name="T">Тип получаемых объектов</typeparam>
+        /// <returns>Результаты выборки</returns>
+        public List<T> GetList<T>()
+        {
+            this.OpenConnection();
+            var res = new List<T>();
+            using (var dr = this.command.ExecuteReader())
+            {
+                var creator = this.GetCreator<T>(dr);
+                while (dr.Read()) res.Add(creator(dr));
+            }
+            return res;
+        }
         /// <summary>
         /// Выполнение запроса и получение списка объектов - результата выборки множества строк и неограниченного кол-ва подчиненных выборок
         /// </summary>
@@ -786,7 +815,10 @@ namespace Neyro.Data
             this.Dispose(true);
             GC.SuppressFinalize(this);
         }
-
+        /// <summary>
+        /// IDisposable.Dispose
+        /// </summary>
+        /// <param name="disposing"></param>
         protected virtual void Dispose(bool disposing)
         {
             if (disposing)
