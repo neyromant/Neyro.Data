@@ -19,6 +19,7 @@ namespace Neyro.Data
         private static readonly MethodInfo getValueMethod = typeof(IDataRecord).GetMethod("get_Item", new[] { typeof(int) });
         private static readonly MethodInfo isDbNullMethod = typeof(IDataRecord).GetMethod("IsDBNull", new[] { typeof(int) });
 
+        private bool disposed;
         private IDbConnection connection;
         private IDbCommand command;
         private int cmdHashCode;
@@ -821,20 +822,25 @@ namespace Neyro.Data
         /// <param name="disposing"></param>
         protected virtual void Dispose(bool disposing)
         {
+            if (this.disposed) return;
+
             if (disposing)
             {
-                if (this.command != null)
-                {
-                    this.command.Dispose();
-                }
-                if (this.connection != null)
-                {
-                    this.connection.Close();
-                    this.connection.Dispose();
-                }
                 this.command = null;
                 this.connection = null;
             }
+
+            if (this.command != null)
+            {
+                this.command.Dispose();
+            }
+            if (this.connection != null)
+            {
+                this.connection.Close();
+                this.connection.Dispose();
+            }
+
+            this.disposed = true;
         }
 
     }
