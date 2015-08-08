@@ -824,12 +824,6 @@ namespace Neyro.Data
         {
             if (this.disposed) return;
 
-            if (disposing)
-            {
-                this.command = null;
-                this.connection = null;
-            }
-
             if (this.command != null)
             {
                 this.command.Dispose();
@@ -838,6 +832,12 @@ namespace Neyro.Data
             {
                 this.connection.Close();
                 this.connection.Dispose();
+            }
+
+            if (disposing)
+            {
+                this.command = null;
+                this.connection = null;
             }
 
             this.disposed = true;
